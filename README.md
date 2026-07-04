@@ -5,6 +5,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/richardwooding/fingerprint)](https://goreportcard.com/report/github.com/richardwooding/fingerprint)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+**Website:** [richardwooding.github.io/fingerprint](https://richardwooding.github.io/fingerprint/)
+
 Two small content-fingerprinting primitives for **near-duplicate / similar-content
 detection** in Go:
 

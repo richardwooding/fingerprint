@@ -132,9 +132,14 @@ appear to mean — a wrong ISCC is a claim that this content is some *other* con
 | a DNG | its first directory is a preview, with the sensor data in a sub-directory `x/image` cannot reach |
 | an animated WebP | no single image to identify; the decoder refuses it outright rather than picking a frame |
 
+EXIF orientation is applied wherever the format in hand keeps it — a JPEG's Exif APP1 segment, a
+TIFF's own IFD0, a WebP's `EXIF` chunk, a PNG's `eXIf` chunk — because ISO 24138 transposes first,
+so a missed orientation yields the code of a rotation of the image rather than of the image.
+
 Known gaps: a 16-bit BMP (Pillow reads it, `x/image/bmp` does not), JPEG-in-TIFF, BigTIFF, CMYK and
-YCbCr TIFF — all clean decode errors. A PNG `eXIf` orientation is not yet applied, which Pillow
-does apply; see the note in `CLAUDE.md`. HEIC and AVIF need a decoder that does not exist in pure Go.
+YCbCr TIFF — all clean decode errors. Pillow will also take a PNG's EXIF from an ImageMagick-style
+`Raw profile type exif` text chunk, which this does not read. HEIC and AVIF need a decoder that does
+not exist in pure Go.
 
 ## License
 

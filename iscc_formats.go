@@ -172,3 +172,42 @@ func webpOrientation(data []byte) int {
 	}
 	return 0
 }
+
+// pngOrientation reads the orientation out of a PNG's eXIf chunk, or 0.
+//
+// PNG 1.5 added eXIf, whose payload is a bare TIFF header — the same thing
+// tiffOrientation eats. Pillow reads it, so iscc-sdk transposes a rotated PNG,
+// and a code computed without that transpose describes a rotation of the image
+// rather than the image itself.
+//
+// Only the eXIf chunk is read. Pillow ALSO accepts EXIF from a tEXt/zTXt/iTXt
+// chunk keyed "exif" or "Raw profile type exif" — ImageMagick's older
+// hex-encoded convention — which is a remaining divergence, recorded in
+// CLAUDE.md rather than silently ignored.
+func pngOrientation(data []byte) int {
+	const signature = 8 // \x89PNG\r\n\x1a\n
+	if len(data) < signature || string(data[1:4]) != "PNG" {
+		return 0
+	}
+	// Each chunk is a big-endian u32 payload length, a four-byte type, the
+	// payload, then a u32 CRC.
+	for i := signature; i+12 <= len(data); {
+		length := int(binary.BigEndian.Uint32(data[i:]))
+		if length < 0 || i+12+length > len(data) {
+			return 0
+		}
+		switch string(data[i+4 : i+8]) {
+		case "eXIf":
+			payload := data[i+8 : i+8+length]
+			// The chunk holds a bare TIFF header; a writer that lifted the
+			// segment out of a JPEG may have left its marker on the front.
+			return tiffOrientation(bytes.TrimPrefix(payload, []byte("Exif\x00\x00")))
+		case "IEND":
+			// The image ends here. Anything appended after it is not part of
+			// this PNG and must not be able to reorient it.
+			return 0
+		}
+		i += 12 + length
+	}
+	return 0
+}

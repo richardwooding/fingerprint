@@ -3,6 +3,7 @@ package fingerprint_test
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"os"
 	"sort"
@@ -435,4 +436,113 @@ func chunkOf(fourCC string, payload []byte) []byte {
 		out = append(out, 0)
 	}
 	return out
+}
+
+// TestISCCPixelsAppliesPNGOrientation: a PNG can carry an orientation too, in
+// an eXIf chunk (PNG 1.5), and Pillow reads it — so iscc-sdk transposes a
+// rotated PNG. Not doing the same produced the code of a ROTATION of the image
+// while the reference produced the code of the image, which is a divergence
+// rather than a rounding difference. See fingerprint#8.
+func TestISCCPixelsAppliesPNGOrientation(t *testing.T) {
+	base := readFixture(t, "iscc_demo.png")
+	plain := isccPixelsOf(t, "iscc_demo.png")
+
+	rotated, err := fingerprint.ISCCPixelsFromReader(bytes.NewReader(pngWithEXIF(t, base, 6)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(plain, rotated) {
+		t.Fatal("the PNG's eXIf orientation was ignored")
+	}
+
+	// Transposed must mean transposed: the result has to match the reference
+	// image rotated the same way, not merely differ from the upright one.
+	want := fingerprint.ISCCPixels(rotate90(loadImage(t, "iscc_demo.png")))
+	if off, worst := compareBytes(rotated, want); worst > 0 {
+		t.Errorf("transposed PNG is not the rotated reference: %d pixels differ, worst %d", off, worst)
+	}
+}
+
+// TestPNGOrientationTolerance: best-effort throughout, as with every other
+// format. A nonsensical or unreachable orientation means no transpose, never an
+// error — and a chunk appended AFTER IEND must not be able to reorient a PNG
+// that has already ended.
+func TestPNGOrientationTolerance(t *testing.T) {
+	base := readFixture(t, "iscc_demo.png")
+	plain := isccPixelsOf(t, "iscc_demo.png")
+
+	cases := map[string][]byte{
+		"orientation 0":      pngWithEXIF(t, base, 0),
+		"orientation 9":      pngWithEXIF(t, base, 9),
+		"orientation 1":      pngWithEXIF(t, base, 1),
+		"truncated exif":     pngWithChunk(t, base, "eXIf", []byte{'I', 'I'}),
+		"empty exif":         pngWithChunk(t, base, "eXIf", nil),
+		"appended past IEND": append(append([]byte{}, base...), exifChunk(t, 6)...),
+	}
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := fingerprint.ISCCPixelsFromReader(bytes.NewReader(data))
+			if err != nil {
+				t.Fatalf("should be ignored, not an error: %v", err)
+			}
+			if !bytes.Equal(got, plain) {
+				t.Error("changed the normalised image; it should have been ignored")
+			}
+		})
+	}
+}
+
+// exifChunk builds a PNG eXIf chunk carrying one orientation tag.
+func exifChunk(t *testing.T, orientation uint16) []byte {
+	t.Helper()
+	exif := []byte{'I', 'I', 42, 0, 8, 0, 0, 0, 1, 0}
+	exif = binary.LittleEndian.AppendUint16(exif, 0x0112)
+	exif = binary.LittleEndian.AppendUint16(exif, 3)
+	exif = binary.LittleEndian.AppendUint32(exif, 1)
+	exif = binary.LittleEndian.AppendUint16(exif, orientation)
+	exif = append(exif, 0, 0)
+	exif = binary.LittleEndian.AppendUint32(exif, 0) // no next IFD
+	return pngChunk("eXIf", exif)
+}
+
+// pngWithEXIF splices an eXIf chunk carrying an orientation in before IEND,
+// which is where a writer puts it.
+func pngWithEXIF(t *testing.T, base []byte, orientation uint16) []byte {
+	t.Helper()
+	return insertBeforeIEND(t, base, exifChunk(t, orientation))
+}
+
+// pngWithChunk splices an arbitrary chunk in before IEND, for the malformed
+// payloads the tolerance test needs.
+func pngWithChunk(t *testing.T, base []byte, typ string, payload []byte) []byte {
+	t.Helper()
+	return insertBeforeIEND(t, base, pngChunk(typ, payload))
+}
+
+// pngChunk frames a payload as a PNG chunk: big-endian length, type, payload,
+// then the CRC-32 of type and payload together.
+func pngChunk(typ string, payload []byte) []byte {
+	out := binary.BigEndian.AppendUint32(nil, uint32(len(payload)))
+	out = append(out, typ...)
+	out = append(out, payload...)
+	crc := crc32.NewIEEE()
+	_, _ = crc.Write([]byte(typ))
+	_, _ = crc.Write(payload)
+	return binary.BigEndian.AppendUint32(out, crc.Sum32())
+}
+
+// insertBeforeIEND walks the chunk list and splices in before the end marker.
+func insertBeforeIEND(t *testing.T, base, chunk []byte) []byte {
+	t.Helper()
+	for i := 8; i+12 <= len(base); {
+		length := int(binary.BigEndian.Uint32(base[i:]))
+		if string(base[i+4:i+8]) == "IEND" {
+			out := append([]byte{}, base[:i]...)
+			out = append(out, chunk...)
+			return append(out, base[i:]...)
+		}
+		i += 12 + length
+	}
+	t.Fatal("no IEND chunk in the fixture")
+	return nil
 }

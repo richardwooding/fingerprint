@@ -265,9 +265,12 @@ func encodePNG(t testing.TB, img image.Image) []byte {
 	return buf.Bytes()
 }
 
-// TestISCCPixelsFromReaderPNGHasNoOrientation pins that a PNG is not searched
-// for an orientation it cannot carry.
-func TestISCCPixelsFromReaderPNGHasNoOrientation(t *testing.T) {
+// TestISCCPixelsFromReaderPNGWithoutEXIF pins that a PNG carrying no
+// orientation is not transposed. It says nothing about PNGs in general: one CAN
+// carry an orientation, in an eXIf chunk, and that case is
+// TestISCCPixelsAppliesPNGOrientation in iscc_formats_test.go. This test's
+// earlier name claimed the opposite and was wrong.
+func TestISCCPixelsFromReaderPNGWithoutEXIF(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 32, 16))
 	for y := 0; y < 16; y++ {
 		for x := 0; x < 32; x++ {

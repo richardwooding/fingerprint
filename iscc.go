@@ -105,9 +105,12 @@ func orientationFor(format string, data []byte) int {
 		if o := webpOrientation(data); o != 0 {
 			return o
 		}
+	case "png":
+		if o := pngOrientation(data); o != 0 {
+			return o
+		}
 	}
-	// PNG's eXIf chunk is a known gap, tracked separately; GIF and BMP have
-	// nowhere to put an orientation.
+	// GIF and BMP have nowhere to put an orientation.
 	return 1
 }
 

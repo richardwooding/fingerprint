@@ -112,9 +112,15 @@ BMP, TIFF and WebP came later, and the plumbing was the easy half. What is worth
   plus a pHash distance, not a conformance bound. The code-level assertion — every encoding giving
   `ISCC:EEA4GQZQTY6J5DTH` — lives in `c2pa-mcp`, which is where this package meets `iscc-lib`; this
   package still computes no ISCC and takes no dependency on one.
-- **Known gap, worth closing when someone is in here**: a PNG `eXIf` chunk carries an orientation,
-  Pillow reads it, and `orientationFor` does not — so a rotated PNG gets a code for its rotation
-  where `iscc-sdk` would transpose it. The fix is a PNG chunk walk into the same `tiffOrientation`.
+- **PNG's `eXIf` chunk is read too** (`pngOrientation`, closing #8): PNG 1.5 added it, Pillow reads
+  it, so `iscc-sdk` transposes a rotated PNG — and before this a rotated PNG got the code of its
+  rotation while the reference got the code of the image. The walk **stops at `IEND`**: bytes
+  appended after a PNG has ended must not be able to reorient it, which is the same argument
+  `c2pa`'s PDF reader makes about bytes after `%%EOF`.
+  **The remaining divergence**: Pillow ALSO accepts PNG EXIF from a `tEXt`/`zTXt`/`iTXt` chunk keyed
+  `exif` or `Raw profile type exif` — ImageMagick's older hex-encoded convention — which means
+  hex-decoding a text chunk and is not implemented. Recorded here rather than left to be
+  rediscovered; the `eXIf` chunk is what any modern encoder writes.
 - `x/image` decoder limits that surface as clean errors and need no code: 16-bit BMP (Pillow reads
   it), JPEG-in-TIFF, BigTIFF, CMYK/YCbCr TIFF, 12/14-bit TIFF, animated WebP. A multi-page TIFF
   decodes its first directory only, which is what Pillow's frame 0 does too — correct, not a gap.

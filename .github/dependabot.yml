@@ -1,0 +1,46 @@
+version: 2
+updates:
+  # Go module dependencies.
+  #
+  # This repository has exactly one: golang.org/x/image. That makes a bump here
+  # louder than the PR count suggests, because x/image's own `go` directive is
+  # what sets this module's Go floor — and ci.yml's matrix pins a lower bound
+  # ("1.25") to match go.mod. A release that raises x/image's floor will
+  # therefore go red on the lower leg until go.mod and that matrix move
+  # together, which is the intended signal rather than a surprise.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Africa/Johannesburg
+    labels:
+      - dependencies
+      - go
+    open-pull-requests-limit: 5
+    groups:
+      # Batch minor/patch bumps to cut PR noise; security updates still
+      # come as separate, prioritised PRs by default.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions used in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Africa/Johannesburg
+    labels:
+      - dependencies
+      - github-actions
+    open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

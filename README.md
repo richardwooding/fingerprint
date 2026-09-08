@@ -16,6 +16,9 @@ detection** in Go:
 - **Images — perceptual hash / pHash** (`PHash` / `PHashFromImage`, with `PHashHex` /
   `PHashFromHex`): a 64-bit DCT-based hash for finding visually-similar images regardless
   of scale or minor edits.
+- **Images — ISO 24138 normalisation** (`ISCCPixels` / `ISCCPixelsFromReader`): the 1024
+  grayscale bytes an **ISCC** Image-Code is computed from. Not a hash — the missing step
+  before one.
 
 Both return a `uint64`; pairwise **Hamming `Distance`** (and `Similarity = 1 -
 distance/64`) measures closeness — small distance means similar content.
@@ -65,11 +68,51 @@ back, _ := fingerprint.PHashFromHex(hex)
 `PHash` downscales to 32×32 greyscale, runs a 2-D DCT, and keeps the sign of the low-frequency
 coefficients — the classic perceptual-hash recipe, robust to scaling and re-compression.
 
+## ISCC normalisation (ISO 24138)
+
+An **ISCC** — the International Standard Content Code, ISO 24138:2024 — is the one open, registered
+algorithm on the [C2PA soft binding algorithm
+list](https://github.com/c2pa-org/softbinding-algorithm-list), which makes it the way to give a C2PA
+manifest a fingerprint that survives re-encoding. The codes themselves are computed by
+[`iscc-lib`](https://github.com/iscc/iscc-lib), the official pure-Go implementation of the standard
+— but it takes 1024 already-normalised pixels, and its own documentation says to "pre-process your
+image to 32x32 grayscale **externally**". Nothing in Go did that. This does:
+
+```go
+f, _ := os.Open("photo.jpg")
+pixels, err := fingerprint.ISCCPixelsFromReader(f)  // EXIF transpose, flatten, trim, gray, 32x32
+code, err := iscc.GenImageCodeV0(pixels, 64)        // github.com/iscc/iscc-lib/packages/go
+// ISCC:EEA4GQZQTY6J5DTH
+```
+
+The steps are the standard's, in its order: apply the EXIF orientation, composite transparency onto
+white, trim a uniform border, convert to grayscale, resample to 32x32.
+
+### Why this re-implements Pillow's arithmetic rather than approximating it
+
+ISO 24138's conformance vectors begin *after* normalisation — they take the 1024 pixels as their
+input — so nothing official pins how an image becomes those pixels, and getting it wrong yields a
+code that is silently non-conformant. So the greyscale is Rec. 601 in the same 16-bit fixed point
+the reference uses, and the resample is its two-pass fixed-point bicubic, intermediate byte rounding
+included. A float implementation lands one off on some pixels, and one pixel can be one bit of a
+code.
+
+It is checked against the exact pixel values the reference implementation publishes for
+`testdata/iscc_demo.png`: **all 28 match byte for byte.** The JPEG of the same photograph differs by
+1 on a handful, because Go's `image/jpeg` and libjpeg round YCbCr to RGB differently — a decoder
+difference, not a normalisation one, which the PNG's exactness proves. It does not change the
+outcome: both encodings still produce `ISCC:EEA4GQZQTY6J5DTH`, the code the reference publishes for
+that photograph, which is exactly the robustness a perceptual identifier exists to provide. See
+[`testdata/README.md`](testdata/README.md) for the oracle's provenance.
+
+This package computes no ISCC and takes no dependency on one: it produces the bytes and stops.
+
 ## Requirements
 
 - **Go 1.25+** — the SimHash half is pure stdlib; the pHash half uses
   [`golang.org/x/image`](https://pkg.go.dev/golang.org/x/image) for high-quality downscaling,
-  which sets the floor.
+  which sets the floor. The ISCC normaliser is stdlib only, including its EXIF orientation
+  read: one tag does not justify a second dependency.
 
 ## License
 

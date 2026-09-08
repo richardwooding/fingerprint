@@ -54,7 +54,7 @@ drops to ~0.55 while genuine near-duplicates stay high.
 ## Image similarity (pHash)
 
 ```go
-h1, _ := fingerprint.PHash(file1) // io.Reader of a PNG/JPEG/GIF
+h1, _ := fingerprint.PHash(file1) // io.Reader of a PNG/JPEG/GIF/BMP/TIFF/WebP
 h2, _ := fingerprint.PHash(file2)
 
 if fingerprint.Distance(h1, h2) <= 10 {
@@ -109,10 +109,32 @@ This package computes no ISCC and takes no dependency on one: it produces the by
 
 ## Requirements
 
-- **Go 1.25+** — the SimHash half is pure stdlib; the pHash half uses
-  [`golang.org/x/image`](https://pkg.go.dev/golang.org/x/image) for high-quality downscaling,
-  which sets the floor. The ISCC normaliser is stdlib only, including its EXIF orientation
-  read: one tag does not justify a second dependency.
+- **Go 1.25+** — the SimHash half is pure stdlib. Everything image-shaped uses
+  [`golang.org/x/image`](https://pkg.go.dev/golang.org/x/image), which sets the floor: the pHash
+  half for high-quality downscaling, and both image halves for the BMP, TIFF and WebP decoders.
+  That is still one dependency, and the arithmetic remains ours — the ISCC normaliser's resample
+  and its EXIF orientation read are hand-written stdlib, because one tag does not justify a second
+  dependency and the resample has to match Pillow's rounding rather than x/image's.
+
+### Formats
+
+`PHash` and `ISCCPixelsFromReader` accept whatever is registered with `image.Decode`; this package
+registers **GIF, JPEG, PNG** (stdlib) and **BMP, TIFF, WebP** (`x/image`), and a program that
+registers another decoder gets that format too.
+
+A few inputs are refused rather than fingerprinted, because their pixels would not mean what they
+appear to mean — a wrong ISCC is a claim that this content is some *other* content:
+
+| input | why |
+| --- | --- |
+| a planar-configuration TIFF | `x/image/tiff` does not read that tag and decodes it as if interleaved, returning colour noise with no error |
+| a TIFF whose first directory is a reduced-resolution preview | the preview's code is not the image's |
+| a DNG | its first directory is a preview, with the sensor data in a sub-directory `x/image` cannot reach |
+| an animated WebP | no single image to identify; the decoder refuses it outright rather than picking a frame |
+
+Known gaps: a 16-bit BMP (Pillow reads it, `x/image/bmp` does not), JPEG-in-TIFF, BigTIFF, CMYK and
+YCbCr TIFF — all clean decode errors. A PNG `eXIf` orientation is not yet applied, which Pillow
+does apply; see the note in `CLAUDE.md`. HEIC and AVIF need a decoder that does not exist in pure Go.
 
 ## License
 

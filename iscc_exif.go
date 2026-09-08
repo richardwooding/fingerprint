@@ -14,7 +14,8 @@ import (
 // the way it is meant to be seen — otherwise its code describes a rotation of
 // itself. Reading one tag does not justify a dependency in a package that has
 // one, so the twelve bytes that matter are parsed here: APP1, the TIFF header's
-// byte order, IFD0, tag 0x0112.
+// byte order, IFD0, tag 0x0112. TIFF and WebP keep the same tag in their own
+// places; iscc_formats.go reaches it there.
 //
 // Everything here is best-effort. A truncated, absent, or nonsensical
 // orientation means no transpose, never an error: the image is still perfectly
@@ -25,8 +26,9 @@ import (
 func bytesReader(data []byte) io.Reader { return bytes.NewReader(data) }
 
 // jpegOrientation returns the EXIF orientation of a JPEG, 1 through 8, or 1
-// when there is none to read. Only JPEG carries one in a form this matters for;
-// PNG and GIF return 1 by falling through the marker scan.
+// when there is none to read. It is gated on the SOI magic, so any other format
+// falls straight through — see orientationFor, which routes each format to the
+// place it keeps its orientation.
 func jpegOrientation(data []byte) int {
 	const none = 1
 	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
@@ -61,51 +63,6 @@ func jpegOrientation(data []byte) int {
 		i += 2 + length
 	}
 	return none
-}
-
-// tiffOrientation reads tag 0x0112 out of a TIFF header's first IFD. Returns 0
-// when it is absent or the structure does not hold together.
-func tiffOrientation(tiff []byte) int {
-	if len(tiff) < 8 {
-		return 0
-	}
-	var bo binary.ByteOrder
-	switch string(tiff[:2]) {
-	case "II":
-		bo = binary.LittleEndian
-	case "MM":
-		bo = binary.BigEndian
-	default:
-		return 0
-	}
-	if bo.Uint16(tiff[2:]) != 42 {
-		return 0
-	}
-	off := int(bo.Uint32(tiff[4:]))
-	if off < 8 || off+2 > len(tiff) {
-		return 0
-	}
-	count := int(bo.Uint16(tiff[off:]))
-	// Each entry is 12 bytes: tag, type, count, value.
-	for i := 0; i < count; i++ {
-		e := off + 2 + i*12
-		if e+12 > len(tiff) {
-			return 0
-		}
-		if bo.Uint16(tiff[e:]) != 0x0112 {
-			continue
-		}
-		// A SHORT's value sits in the first two bytes of the value field.
-		if bo.Uint16(tiff[e+2:]) != 3 {
-			return 0
-		}
-		v := int(bo.Uint16(tiff[e+8:]))
-		if v < 1 || v > 8 {
-			return 0
-		}
-		return v
-	}
-	return 0
 }
 
 // isccTranspose applies an EXIF orientation, returning img unchanged for the

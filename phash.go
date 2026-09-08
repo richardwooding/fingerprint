@@ -9,7 +9,10 @@ import (
 	"io"
 	"math"
 
+	_ "golang.org/x/image/bmp" // register decoder
 	"golang.org/x/image/draw"
+	_ "golang.org/x/image/tiff" // register decoder
+	_ "golang.org/x/image/webp" // register decoder
 )
 
 // pHash (perceptual hash) for images. Algorithm per Niblack /
@@ -64,6 +67,14 @@ const phashLowFreqSize = 8
 // PHash returns the 64-bit perceptual hash of the image decoded from r.
 // Returns 0 + an error when decoding fails or the image is unusable
 // (smaller than the grid, animated GIF with no first frame, etc.).
+//
+// Accepts every format this package registers with image.Decode: GIF, JPEG,
+// PNG, BMP, TIFF and WebP, plus anything the calling program registers itself.
+// Unlike ISCCPixelsFromReader it does NOT screen out the TIFF layouts whose
+// pixels x/image misreads (see tiffRefusal): doing so would mean buffering
+// every image in full to inspect its directory, and a perceptual hash that is
+// wrong about one odd file simply fails to match, where a wrong ISCC is a claim
+// that this content is some other content.
 //
 // PHash is invariant under (file size, modification time) when the
 // pixels don't change, so the cached value in index.Entry.PHash stays

@@ -64,17 +64,51 @@ func ISCCPixels(img image.Image) []byte {
 // it simply means no transpose.
 //
 // Only the formats registered with image.Decode are supported — this package
-// registers GIF, JPEG and PNG.
+// registers GIF, JPEG, PNG, BMP, TIFF and WebP, and a program that registers
+// another decoder gets that format here too.
+//
+// A few inputs are REFUSED rather than fingerprinted, because their pixels
+// would not mean what they appear to mean: see tiffRefusal. An animated WebP is
+// refused by the decoder itself, so a code is never computed from one arbitrary
+// frame.
 func ISCCPixelsFromReader(r io.Reader) ([]byte, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, &PHashError{msg: "reading image: " + err.Error()}
 	}
-	img, _, err := image.Decode(bytesReader(data))
+	if why := tiffRefusal(data); why != "" {
+		return nil, &PHashError{msg: "cannot fingerprint this image: " + why}
+	}
+	img, format, err := image.Decode(bytesReader(data))
 	if err != nil {
 		return nil, &PHashError{msg: "decoding image: " + err.Error()}
 	}
-	return ISCCPixels(isccTranspose(img, jpegOrientation(data))), nil
+	return ISCCPixels(isccTranspose(img, orientationFor(format, data))), nil
+}
+
+// orientationFor reads the EXIF orientation from wherever the format in hand
+// keeps it, returning 1 (no transpose) for formats that carry none.
+//
+// format is image.Decode's own answer rather than a sniff of our own, so the
+// orientation can never be read out of a different format from the one that
+// produced the pixels.
+func orientationFor(format string, data []byte) int {
+	switch format {
+	case "jpeg":
+		return jpegOrientation(data) // an Exif APP1 segment
+	case "tiff":
+		// The file IS a TIFF header, so its own IFD0 holds the tag.
+		if o := tiffOrientation(data); o != 0 {
+			return o
+		}
+	case "webp":
+		if o := webpOrientation(data); o != 0 {
+			return o
+		}
+	}
+	// PNG's eXIf chunk is a known gap, tracked separately; GIF and BMP have
+	// nowhere to put an orientation.
+	return 1
 }
 
 // isccFlattenAlpha composites an image with transparency onto a white

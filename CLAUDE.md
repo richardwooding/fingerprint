@@ -37,3 +37,34 @@ CI (`.github/workflows/ci.yml`) runs build + vet + race tests on Go `1.25` and `
 ## Tests
 
 `testdata/sample.jpg` is the real-image fixture (`loadFixture`); `phash_test.go` also synthesizes images in-memory (`renderTestImage`). pHash tests assert robustness invariants (survives resize / JPEG re-encode, distinguishes different scenes). `example_test.go` holds runnable `Example_*` godoc examples — keep them passing as they double as documentation.
+
+## ISCC normalisation (`iscc.go`, `iscc_exif.go`)
+
+`ISCCPixels` produces the 1024 grayscale bytes an ISO 24138 Image-Code is computed from. It is
+**deliberately a re-implementation of Pillow's arithmetic**, because ISO 24138's conformance
+vectors start *after* normalisation and nothing official pins how an image becomes those pixels —
+so "close" is a silently non-conformant code:
+
+- greyscale is Rec. 601 in Pillow's 16-bit fixed point (`19595/38470/7471`, `+32768` rounding),
+  not the float form, which lands one off on some pixels;
+- the resample is Pillow's two-pass fixed-point bicubic — `PRECISION_BITS = 22`, coefficients
+  normalised in float and *then* rounded, and the intermediate **rounded back to bytes between the
+  passes**. Accumulating both passes in float gives different bytes. The kernel itself is not where
+  implementations differ: `x/image`'s `CatmullRom` is the same Mitchell–Netravali B=0, C=0.5 spline
+  as Pillow's BICUBIC.
+
+**Do not "simplify" any of that, and do not reuse `phash.go`'s DCT or resize.** pHash resizes then
+greyscales (ISCC does the reverse), uses Catmull-Rom on premultiplied RGBA, and excludes the DC
+coefficient — and its values are cached in file-search-on's bbolt index (`Entry.PHash`), so changing
+them silently invalidates every cached hash.
+
+**The oracle** is `iscc-sdk`'s own published pixel values for `testdata/iscc_demo.{png,jpg}` — 28
+bytes per file — plus the ISCC its `test_main.py` publishes for the JPEG. There is no Python here to
+run, which is why those numbers are transcribed into `iscc_test.go` and their provenance recorded in
+`testdata/README.md`. The PNG matches exactly; the JPEG is ±1 on a handful of pixels because Go's
+`image/jpeg` and libjpeg round YCbCr→RGB differently, and the test bounds that drift rather than
+ignoring it. Both still give `ISCC:EEA4GQZQTY6J5DTH`.
+
+EXIF orientation is read by hand (`iscc_exif.go`: APP1, TIFF byte order, IFD0, tag 0x0112) rather
+than by taking a dependency, and is best-effort throughout — a malformed or absent tag means no
+transpose, never an error.

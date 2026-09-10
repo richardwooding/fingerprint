@@ -58,8 +58,14 @@ type PCM struct {
 // signed 32-bit values `fpcalc -raw -signed` prints, and the input
 // iscc.GenAudioCodeV0 takes.
 //
-// Multi-channel audio is downmixed to mono by integer averaging, as the
-// reference does. The audio must already be at 11025 Hz.
+// Audio is downmixed to mono and resampled to 11025 Hz first, by the same
+// route fpcalc takes, so the vector is the one fpcalc would print for the
+// same content. See chromaprint_resample.go for why the route matters.
+//
+// Mono and stereo are supported at any sample rate above 1000 Hz. More than
+// two channels is refused unless the audio is already at 11025 Hz, because
+// the downmix would then be a guess at FFmpeg's layout-aware coefficients
+// rather than a reproduction of them.
 //
 // Unlike the hashes in this package the result is a slice, not a uint64, so
 // Distance and Similarity do not apply to it: two Chromaprint vectors are
@@ -68,11 +74,10 @@ func Chromaprint(pcm PCM) ([]int32, error) {
 	if err := chromaValidate(pcm); err != nil {
 		return nil, err
 	}
-	if pcm.SampleRate != chromaSampleRate {
-		return nil, &PHashError{msg: "cannot fingerprint this audio: " +
-			strconv.Itoa(pcm.SampleRate) + " Hz needs resampling to 11025 Hz, which this build does not do"}
+	mono, err := chromaToTargetRate(pcm)
+	if err != nil {
+		return nil, err
 	}
-	mono := chromaMono(pcm)
 	fp := chromaFingerprint(mono)
 	if len(fp) == 0 {
 		ms := len(mono) * 1000 / chromaSampleRate
@@ -98,6 +103,53 @@ func chromaValidate(pcm PCM) error {
 			strconv.Itoa(pcm.Channels) + "-channel frames"}
 	}
 	return nil
+}
+
+// chromaToTargetRate brings validated PCM to the mono 11025 Hz stream the
+// fingerprinter consumes, taking whichever of fpcalc's two routes applies.
+//
+// At 11025 Hz fpcalc builds no converter at all — the audio goes straight to
+// the fingerprinter, which does its own integer downmix. At any other rate
+// FFmpeg gets there first, downmixing and resampling in float before the
+// fingerprinter sees a sample. Reproducing the right one is the difference
+// between the reference's code and a code that merely resembles it.
+func chromaToTargetRate(pcm PCM) ([]int16, error) {
+	if pcm.SampleRate == chromaSampleRate {
+		return chromaMono(pcm), nil
+	}
+	if pcm.Channels > 2 {
+		return nil, &PHashError{msg: "cannot fingerprint this audio: " +
+			strconv.Itoa(pcm.Channels) + " channels at " + strconv.Itoa(pcm.SampleRate) +
+			" Hz — resampling more than two channels needs FFmpeg's layout-aware " +
+			"downmix coefficients, which this build does not reproduce; " +
+			"downmix to mono or stereo first, or resample to 11025 Hz"}
+	}
+
+	// s16 to float, then the 0.5/0.5 downmix, both as swresample does them.
+	n := len(pcm.Samples) / pcm.Channels
+	mono := make([]float32, n)
+	if pcm.Channels == 1 {
+		for i, s := range pcm.Samples {
+			mono[i] = float32(s) * (1.0 / 32768.0)
+		}
+	} else {
+		for i := range n {
+			l := float32(pcm.Samples[2*i]) * (1.0 / 32768.0)
+			r := float32(pcm.Samples[2*i+1]) * (1.0 / 32768.0)
+			mono[i] = 0.5*l + 0.5*r
+		}
+	}
+
+	resampled := newSWRResampler(pcm.SampleRate, chromaSampleRate).resample(mono)
+
+	// Back to the 16 bits the fingerprinter wants, by swresample's rule:
+	// scale in float32, round half to even, clamp.
+	out := make([]int16, len(resampled))
+	for i, v := range resampled {
+		x := math.RoundToEven(float64(v * 32768))
+		out[i] = int16(min(max(x, -32768), 32767))
+	}
+	return out, nil
 }
 
 // chromaMono downmixes validated PCM to a single channel, by the reference's

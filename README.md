@@ -125,22 +125,23 @@ code, err := iscc.GenAudioCodeV0(cv, 64)       // github.com/iscc/iscc-lib/packa
 // ISCC:EIAWUJFCEZZOJYVD
 ```
 
-The input is decoded audio — interleaved 16-bit samples at 11025 Hz, the rate Chromaprint
-fingerprints at — because there is no audio equivalent of `image.Decode`'s registry to hide the
-decoding behind:
+The input is decoded audio — interleaved 16-bit samples at whatever rate the file happens to be —
+because there is no audio equivalent of `image.Decode`'s registry to hide the decoding behind:
 
 ```go
-pcm := fingerprint.PCM{Samples: samples, SampleRate: 11025, Channels: 2}
+pcm := fingerprint.PCM{Samples: samples, SampleRate: 44100, Channels: 2}
 ```
 
-Multi-channel input is downmixed by integer averaging, as the reference does. The result is a
-slice, not a `uint64`, so `Distance` and `Similarity` do not apply: two Chromaprint vectors are
-compared through the ISCC code computed from them.
+Downmixing to mono and resampling to 11025 Hz happen here, by the same route `fpcalc` takes, so
+the vector is the one `fpcalc` would print for the same content. That route is not the obvious one
+and it is [not negotiable](#resampling-and-why-it-is-ffmpegs-and-not-chromaprints).
 
-Audio under about three seconds, and audio at any other sample rate, is **refused** rather than
-fingerprinted. Both would otherwise return an empty vector, and `GenAudioCodeV0` turns an empty
-vector into a perfectly well-formed code — the same one for every such file. A wrong code is a
-claim that this content is some other content.
+The result is a slice, not a `uint64`, so `Distance` and `Similarity` do not apply: two Chromaprint
+vectors are compared through the ISCC code computed from them.
+
+Audio under about three seconds is **refused** rather than fingerprinted. It would otherwise return
+an empty vector, and `GenAudioCodeV0` turns an empty vector into a perfectly well-formed code — the
+same one for every such file. A wrong code is a claim that this content is some other content.
 
 ### Why this is a port of the reference rather than an implementation of a spec
 
@@ -167,22 +168,60 @@ is as close to the true value as the windowed input allows, and therefore the cl
 to every build at once. The measurement above says it is close enough that the question never
 arises.
 
+### Resampling, and why it is FFmpeg's and not Chromaprint's
+
+Chromaprint fingerprints at 11025 Hz and almost nothing is stored at that rate, so the resampler
+decides the answer for nearly every real file. There are two candidates and they are not
+interchangeable.
+
+`fpcalc` never uses Chromaprint's own resampler. It hands the audio to FFmpeg's `swresample`
+first, and the fingerprinter only ever sees 11025 Hz mono. Chromaprint's internal `av_resample` is
+reached only by a caller feeding the library raw PCM at some other rate. Porting that one — the
+obvious choice, since it ships inside Chromaprint — produces a code that looks right and is not:
+on the test recording it moves **62 of 3328 fingerprint bits**, and the resulting ISCC differs from
+the published one in 2 of its 64 bits.
+
+| resampler | code for the test recording |
+| --- | --- |
+| FFmpeg `swresample`, what `fpcalc` and `iscc-sdk` use | `ISCC:EIAWUJFCEZZOJYVD` |
+| Chromaprint's internal `av_resample` | `ISCC:EIAXUJFCEZZOJYVC` |
+
+So this reproduces `swresample`, configured as Chromaprint configures it: engine SWR, filter size
+16, phase shift 8, linear interpolation on, cutoff 0.8, and — because the formats are 16-bit in and
+16-bit out at differing rates — a float32 internal format, which fixes the filter bank's type and
+the rounding of the whole chain. The lead-in and the tail are mirrored rather than zero-padded,
+which is `swresample`'s choice and is visible in the first and last subfingerprints.
+
+**`swresample` is not one number either**, and the same honesty applies as with the FFT: its
+hand-written SIMD kernels and its portable C give float outputs that differ by about one unit in
+the last place. This matches the portable C exactly. The difference never survives the step back to
+16 bits — the two produce byte-identical samples and an identical fingerprint — so matching the
+scalar path matches every build.
+
 ### What carries an exactness claim
 
-Only audio already at **11025 Hz** — mono, or any channel count, since the downmix is integer
-arithmetic with one right answer.
+**Every sample rate above 1000 Hz, mono or stereo.** The conformance test checks eight rates
+against `fpcalc`, and all of them are exact — all 104 subfingerprints, every bit:
 
-Everything else has to be resampled first, and resampling is where the honest claim runs out.
-`fpcalc` does not use Chromaprint's own resampler: it resamples with FFmpeg's `swresample` before
-Chromaprint sees a sample, while a library caller feeding raw audio gets Chromaprint's internal
-`av_resample` with different settings. The two disagree by construction, so there is no single
-"correct" vector for a 44.1 kHz file to match — which is why this build refuses other rates
-outright rather than quietly picking one and calling the result conformant.
+| rate | why it is in the matrix |
+| --- | --- |
+| 11025 | passthrough: `fpcalc` builds no converter at all |
+| 22050, 44100 | integer ratios: one phase, no fractional carry |
+| 48000, 96000 | reduce to 147 phases, still no carry |
+| 8000, 16000, 32000 | do not reduce below the 256-phase bank, so the interpolating path runs |
 
-In practice the choice matters less than it sounds. Resampling the test recording from 44.1 kHz
-stereo down to 11025 Hz mono moves **2 of its 104 values, 2 bits of 3328**, and the ISCC is
-unchanged — the same code the 24-bit master, the MP3 and the downsampled WAV all produce. See
-[`testdata/README.md`](testdata/README.md) for the fixtures and the commands.
+The two convolution paths are both covered, which matters: a resampler can be right about one and
+wrong about the other.
+
+**More than two channels is refused above 11025 Hz.** FFmpeg's downmix for a 5.1 layout uses
+layout-aware coefficients this does not reproduce, and a plausible guess would be silently wrong.
+At 11025 Hz no resampling happens, the fingerprinter's own integer downmix applies, and any channel
+count is fine.
+
+Encoding still moves a little, and the code still does not: the 24-bit 44.1 kHz master, the MP3 and
+the 11025 Hz mono derivative differ by **2 values of 104, 2 bits of 3328**, and all three produce
+`ISCC:EIAWUJFCEZZOJYVD`. See [`testdata/README.md`](testdata/README.md) for the fixtures and the
+commands.
 
 ## Requirements
 

@@ -144,9 +144,9 @@ func TestChromaprintRefusals(t *testing.T) {
 			fingerprint.PCM{Samples: make([]int16, 101), SampleRate: 11025, Channels: 2},
 			"whole number of 2-channel frames",
 		},
-		"needs resampling": {
-			fingerprint.PCM{Samples: make([]int16, 100000), SampleRate: 44100, Channels: 1},
-			"needs resampling to 11025 Hz",
+		"too many channels to resample": {
+			fingerprint.PCM{Samples: make([]int16, 300000), SampleRate: 44100, Channels: 6},
+			"layout-aware downmix coefficients",
 		},
 		"too short": {
 			fingerprint.PCM{Samples: make([]int16, 11025), SampleRate: 11025, Channels: 1},
@@ -200,5 +200,35 @@ func TestChromaprintSilenceStillFingerprints(t *testing.T) {
 		if v != got[0] {
 			t.Fatalf("silence produced varying subfingerprints: [0]=%d [%d]=%d", got[0], i, v)
 		}
+	}
+}
+
+// TestChromaprintManyChannelsAtTargetRate is the other side of the
+// multi-channel refusal: at 11025 Hz no resampling happens, so the
+// fingerprinter's own integer downmix applies and any channel count is fine.
+// The refusal is about reproducing FFmpeg's downmix, not about the channels.
+func TestChromaprintManyChannelsAtTargetRate(t *testing.T) {
+	mono := loadPCM(t, "iscc_demo_audio.wav")
+	const channels = 6
+	wide := fingerprint.PCM{
+		Samples:    make([]int16, len(mono.Samples)*channels),
+		SampleRate: mono.SampleRate,
+		Channels:   channels,
+	}
+	for i, s := range mono.Samples {
+		for c := range channels {
+			wide.Samples[i*channels+c] = s
+		}
+	}
+	got, err := fingerprint.Chromaprint(wide)
+	if err != nil {
+		t.Fatalf("Chromaprint: %v", err)
+	}
+	want, err := fingerprint.Chromaprint(mono)
+	if err != nil {
+		t.Fatalf("mono: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Error("six identical channels changed the fingerprint")
 	}
 }

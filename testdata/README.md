@@ -154,3 +154,31 @@ and its portable C differ by about one unit in the last place, which shows up as
 resampled samples differing by 1**. After the step back to 16 bits the two are byte-identical, and
 the fingerprints are identical to the bit. This package matches the portable C exactly, and
 therefore matches both.
+
+## iscc_demo_audio.mp3, iscc_demo_audio.mp3.fpcalc.json
+
+The same recording as `iscc_demo_audio.wav`, and the same CC-BY-4.0 by Titusz Pan — but this one is
+**copied verbatim from `iscc_samples`** (`iscc_samples/files/audio/demo.mp3`) rather than derived,
+because it is the exact file `iscc-sdk` publishes numbers for.
+
+That makes it the strongest fixture here. `fpcalc -raw -json -signed -length 0` on this file
+reproduces the 104-element vector in `iscc-sdk`'s `tests/test_audio.py` element for element, and
+this package reproduces that in turn — so the chain runs from committed Go code to the reference
+implementation's own published constants with nothing taken on trust in between.
+
+It is also the fixture that pins the gapless trimming. Decoded naively the samples begin **2257
+frames early** — one Xing header frame at 1152, the LAME tag's 576-frame encoder delay, and the
+decoder's 529-sample group delay — and every 124 ms frame is re-cut, costing 222 of 3328 bits. The
+committed oracle fails immediately if any of those three constants moves.
+
+**The MP3 and the lossless WAV differ by 2 bits of 3328** and produce the same
+`ISCC:EIAWUJFCEZZOJYVD`. `TestMP3AgreesWithTheLosslessMaster` holds that to a bound of 4 rather
+than asserting equality, because the two paths are a lossy codec and a resampler and they are
+genuinely allowed to move — just not much.
+
+**No MPEG-2 fixture is committed**, because the reader refuses the whole version. `go-mp3` rejects
+MPEG-2.5 outright and mis-decodes some MPEG-2 configurations badly: at 22050 Hz, 96 kbps comes out
+wrong by ~1100 of 3328 bits while 64 kbps comes out exact, and nothing in the header separates
+them. Every MPEG-1 configuration measured is exact — 32000/44100/48000 Hz at 64/128/192/320 kbps,
+mono and stereo, plus VBR at three quality settings: 26 of 27 bit-identical, the twenty-seventh
+differing in a single bit that does not change the code.

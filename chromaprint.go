@@ -146,8 +146,7 @@ func chromaToTargetRate(pcm PCM) ([]int16, error) {
 	// scale in float32, round half to even, clamp.
 	out := make([]int16, len(resampled))
 	for i, v := range resampled {
-		x := math.RoundToEven(float64(v * 32768))
-		out[i] = int16(min(max(x, -32768), 32767))
+		out[i] = floatToS16(float64(v * 32768))
 	}
 	return out, nil
 }

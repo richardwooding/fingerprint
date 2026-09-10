@@ -120,16 +120,24 @@ meant shelling out to the `fpcalc` binary or binding the C library through cgo �
 that ships a static binary or compiles to WebAssembly. This does it in process:
 
 ```go
-cv, err := fingerprint.Chromaprint(pcm)        // []int32, one word per ~124 ms
+f, _ := os.Open("track.wav")
+cv, err := fingerprint.ChromaprintFromWAV(f)   // []int32, one word per ~124 ms
 code, err := iscc.GenAudioCodeV0(cv, 64)       // github.com/iscc/iscc-lib/packages/go
 // ISCC:EIAWUJFCEZZOJYVD
 ```
 
-The input is decoded audio — interleaved 16-bit samples at whatever rate the file happens to be —
-because there is no audio equivalent of `image.Decode`'s registry to hide the decoding behind:
+`ChromaprintFromWAV` reads uncompressed RIFF/WAVE — 8-bit unsigned, 16-, 24- and 32-bit signed
+integer and 32- or 64-bit float samples, including `WAVE_FORMAT_EXTENSIBLE`, and it skips the
+`LIST`, `fact` and `bext` chunks real files carry. A compressed WAV is refused by name rather than
+mis-read: this reads samples, it does not decode audio.
+
+For anything else, decode it yourself and hand over the samples. There is no audio equivalent of
+`image.Decode`'s registry to hide the decoding behind, so the reader has to name its format:
 
 ```go
-pcm := fingerprint.PCM{Samples: samples, SampleRate: 44100, Channels: 2}
+cv, err := fingerprint.Chromaprint(fingerprint.PCM{
+    Samples: samples, SampleRate: 44100, Channels: 2,
+})
 ```
 
 Downmixing to mono and resampling to 11025 Hz happen here, by the same route `fpcalc` takes, so

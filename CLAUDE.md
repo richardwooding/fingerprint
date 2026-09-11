@@ -26,7 +26,7 @@ CI (`.github/workflows/ci.yml`) runs build + vet + race tests on Go `1.25` and `
 
 ## Things to know before editing
 
-- **Go 1.25 is the floor**, set by `golang.org/x/image`, not by language features. The code uses Go 1.22+ `range int` (`for i := range 64`) throughout — keep that idiom. Don't raise the floor without updating both `go.mod` and the CI matrix's lower bound.
+- **Go 1.25 is the floor**, set by `golang.org/x/image`, not by language features. There are now **two** dependencies: `x/image` for image decoding and `hajimehoshi/go-mp3` for MP3. Everything else, including all of the Chromaprint arithmetic, is stdlib and should stay that way. The code uses Go 1.22+ `range int` (`for i := range 64`) throughout — keep that idiom. Don't raise the floor without updating both `go.mod` and the CI matrix's lower bound.
 - **The numeric thresholds are the contract.** Similarity/distance tables in the package docs, README, and `simhash_test.go` (`~0.55` unrelated baseline, `0.85`/distance-9 near-duplicate cut) and `phash_test.go` are calibrated against real-world behavior. Changing the algorithm (`shingleSize`, the DCT/median recipe, tokenization) shifts these numbers — re-validate against the tests and update the docs in lockstep.
 - **SimHash is deliberately shingled** (3-word shingles, `shingleSize`). This is the central design decision: single-token SimHash collapses unrelated prose to ~90% similar because of stopword dominance. Inputs shorter than `shingleSize` tokens fall back to single-token features so short strings still fingerprint. Don't "simplify" back to single tokens.
 - **`Compute("")` and decode failures return `0`** — a legitimate fingerprint value, not a sentinel. Callers distinguish "no content" via a separate length/error check.
@@ -219,6 +219,29 @@ guessed at, because a fingerprint of the wrong samples is a claim about the wron
 - Every width is checked against the others rather than against its own oracle: the same signal at
   16, 24 and 32 bits and as f32/f64 carries the same 16 bits, so the fingerprints must be equal.
   8-bit genuinely loses information and is exempt.
+
+### The MP3 reader (`chromaprint_mp3.go`)
+
+`ChromaprintFromMP3` exists because c2pa-mcp signs MP3s. The decoding is `hajimehoshi/go-mp3`,
+the package's **second dependency** — the first since `x/image`, and the README's "one dependency"
+framing had to change for it.
+
+- **The alignment is the whole problem, not the samples.** go-mp3 and FFmpeg differ by an average
+  of 0.6 in 32768, which the fingerprint absorbs; what it does not absorb is a 2257-frame offset,
+  which re-cuts every 124 ms frame and costs 222 of 3328 bits. Reproducing FFmpeg means dropping
+  the Xing header frame (1152), the LAME encoder delay, and the 529-sample filterbank group delay,
+  and trimming the end padding by that same 529. Change any one of those constants and the
+  conformance test fails loudly, which is the point.
+- **MPEG-2 and 2.5 are refused on purpose, and this must not be "fixed" by allowing them.** go-mp3
+  rejects 2.5 itself; worse, it mis-decodes *some* MPEG-2 configurations — 96 kbps at 22050 Hz is
+  wrong by ~1100 bits, 64 kbps at the same rate is exact — with nothing in the header to tell them
+  apart. A wrong fingerprint is a claim about the wrong content, so the whole version is refused.
+  If go-mp3 ever fixes this, the gate is one constant and one measurement away from moving.
+- The Xing/Info header is parsed here rather than taken from go-mp3, which does not expose it. The
+  side-information offset is 32 bytes for MPEG-1 stereo and 17 for MPEG-1 mono; the LAME delay and
+  padding share three bytes at 0x15 from the start of the extension.
+- A file with no Xing header is refused: there is no delay recorded, so there is nothing to align
+  to, and the result would silently not match.
 
 ### Regenerating the resampling oracles
 

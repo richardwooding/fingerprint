@@ -73,7 +73,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
           <a class="gl-btn primary" href="#install">Install</a>
           <a class="gl-btn ghost" href="https://pkg.go.dev/github.com/richardwooding/fingerprint">Go Reference</a>
         </div>
-        <p class="gl-hint">MIT licensed · no cgo · one small dependency, for images only · Go 1.25+</p>
+        <p class="gl-hint">MIT licensed · no cgo · two small dependencies, one per medium · Go 1.25+</p>
       </div>
       <div class="gl-term">
         <div class="bar">
@@ -126,12 +126,12 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
         <div class="gl-card">
           <h3><span class="gl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h2l2-6 3 14 3-11 2 5h6"/></svg></span>Audio Chromaprint</h3>
-          <p><code>ChromaprintFromWAV</code> — the acoustic fingerprint an <strong>ISCC Audio-Code</strong> is computed from, matching <code>fpcalc</code> bit for bit at every sample rate. Every other Go option needs cgo or the <code>fpcalc</code> binary.</p>
+          <p><code>ChromaprintFromWAV</code> and <code>ChromaprintFromMP3</code> — the acoustic fingerprint an <strong>ISCC Audio-Code</strong> is computed from, matching <code>fpcalc</code> bit for bit. Every other Go option needs cgo or the <code>fpcalc</code> binary.</p>
         </div>
 
         <div class="gl-card">
           <h3><span class="gl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V5a2 2 0 0 1 2-2h2M20 7V5a2 2 0 0 0-2-2h-2M4 17v2a2 2 0 0 0 2 2h2M20 17v2a2 2 0 0 1-2 2h-2"/><path d="M8 12h8"/></svg></span>Small</h3>
-          <p>The SimHash and Chromaprint halves are pure stdlib — the FFT and classifiers are hand-written. Only images pull in <code>golang.org/x/image</code>. Go 1.25+.</p>
+          <p>Every bit of the Chromaprint arithmetic is hand-written stdlib — FFT, resampler, classifiers. Only decoding pulls anything in: <code>x/image</code> for images, <code>go-mp3</code> for MP3. Go 1.25+.</p>
         </div>
 
       </div>

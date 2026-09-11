@@ -131,6 +131,10 @@ integer and 32- or 64-bit float samples, including `WAVE_FORMAT_EXTENSIBLE`, and
 `LIST`, `fact` and `bext` chunks real files carry. A compressed WAV is refused by name rather than
 mis-read: this reads samples, it does not decode audio.
 
+`ChromaprintFromMP3` reads MPEG-1 Layer III, applying the encoder delay and padding from the
+file's Xing/LAME header exactly as FFmpeg does — [without which every frame in the file is
+re-cut](#mp3-and-the-2257-frames-that-are-not-there). MPEG-2 and 2.5 are refused; see below.
+
 For anything else, decode it yourself and hand over the samples. There is no audio equivalent of
 `image.Decode`'s registry to hide the decoding behind, so the reader has to name its format:
 
@@ -206,6 +210,35 @@ the last place. This matches the portable C exactly. The difference never surviv
 16 bits — the two produce byte-identical samples and an identical fingerprint — so matching the
 scalar path matches every build.
 
+### MP3, and the 2257 frames that are not there
+
+Two conformant MP3 decoders agree on the audio without agreeing on where the stream begins, and
+Chromaprint cuts a frame every 124 ms from sample zero, so a shifted start re-cuts every frame in
+the file. Decoding the test recording with `go-mp3` and fingerprinting it naively disagrees with
+`fpcalc` in **222 of 3328 bits** — not because the samples are wrong, but because they begin 2257
+frames early.
+
+FFmpeg drops three things `go-mp3` keeps, and this reproduces all three:
+
+| dropped | frames | why |
+| --- | --- | --- |
+| the Xing/Info header frame | 1152 | it is metadata written into a silent frame, not audio |
+| the encoder delay | 576 here | the LAME tag records what the encoder prepended |
+| the synthesis filterbank's group delay | 529 | every decoder incurs it; FFmpeg discards it |
+
+and it trims the encoder's end padding by that same 529. With those applied the vector matches
+`fpcalc` exactly — even though the two decoders' samples still differ by an average of 0.6 in
+32768. That is the robustness a perceptual fingerprint exists to provide, measured rather than
+hoped for.
+
+**MPEG-2 and MPEG-2.5 are refused.** The decoder behind this rejects 2.5 outright, and mis-decodes
+some MPEG-2 configurations badly enough to fingerprint as unrelated audio — 96 kbps at 22050 Hz
+comes out wrong, 64 kbps at the same rate comes out exact — with nothing in the header separating
+them. Every MPEG-1 configuration tested is exact: three sample rates, four bitrates, mono and
+stereo, constant and variable, 26 of 27 bit-identical and the twenty-seventh differing in one bit
+of 3328, which does not change the code. Refusing a file this cannot read correctly is the only
+honest answer; convert it to WAV, or decode it yourself and call `Chromaprint`.
+
 ### What carries an exactness claim
 
 **Every sample rate above 1000 Hz, mono or stereo.** The conformance test checks eight rates
@@ -233,9 +266,10 @@ commands.
 
 ## Requirements
 
-- **Go 1.25+** — the SimHash and Chromaprint halves are pure stdlib; the FFT, the chroma
-  folding and the classifiers are all hand-written, so audio adds no dependency at all.
-  Everything image-shaped uses
+- **Go 1.25+** — two dependencies, one per medium. The SimHash half is pure stdlib, and so is
+  all of the Chromaprint arithmetic: the FFT, the resampler, the chroma folding and the
+  classifiers are hand-written, and only decoding MP3 pulls in
+  [`go-mp3`](https://github.com/hajimehoshi/go-mp3). Everything image-shaped uses
   [`golang.org/x/image`](https://pkg.go.dev/golang.org/x/image), which sets the floor: the pHash
   half for high-quality downscaling, and both image halves for the BMP, TIFF and WebP decoders.
   That is still one dependency, and the arithmetic remains ours — the ISCC normaliser's resample

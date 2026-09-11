@@ -119,7 +119,38 @@ of 104, which is 2 bits of 3328**, and every one of the three still produces
 `ISCC:EIAWUJFCEZZOJYVD`. That is the audio twin of the lossy-WebP paragraph above, and a sharper
 version of it: the pixels there moved under re-encoding, and here the sample rate itself moved.
 
-**No fixture is committed for the resampling path**, because there is nothing honest to check it
-against. `fpcalc`'s numbers for a 44.1 kHz input are FFmpeg's resampler, and Chromaprint's own
-library resampler is a different filter with different settings, so the two disagree by
-construction and neither is "the" answer. See the README for which inputs carry an exactness claim.
+## `chromaprint_synth_<rate>_<channels>.fpcalc.json`
+
+The resampling oracles: sixteen of them, one per sample rate and channel count, each the verbatim
+stdout of `fpcalc -raw -json -signed -length 0` on a synthetic six-second clip.
+
+**The audio is generated, not committed.** `synthPCM` in `chromaprint_synth_test.go` builds it from
+three triangle partials, a seeded noise floor and a slow envelope, using **integer arithmetic
+only** — Go permits fused multiply-add, so a floating-point generator is not guaranteed to produce
+identical bytes on every architecture, and an oracle made on one machine would then fail on
+another. The sixteen WAVs come to about 10 MB; the JSON that pins them comes to 64 KB, so only the
+JSON is here. `synthDigests` in the same file pins the generator's output, and fails first and
+loudly if an edit to `synthPCM` would leave these oracles describing audio that no longer exists.
+See CLAUDE.md for the regeneration commands.
+
+The rates are chosen to reach both of `swresample`'s convolution paths: 11025 is a passthrough,
+22050 and 44100 reduce to a single phase, 48000 and 96000 reduce to 147 phases, and 8000, 16000 and
+32000 do not reduce below the 256-phase bank, so a fractional phase carries and the interpolating
+path runs. A resampler can be right about one path and wrong about the other.
+
+## The resampler measurement
+
+Two numbers worth keeping, both taken on the 44.1 kHz master of this recording.
+
+**Chromaprint's own resampler is the wrong one.** `fpcalc` resamples with FFmpeg's `swresample`
+before Chromaprint sees a sample; Chromaprint's internal `av_resample` is reached only by a library
+caller feeding raw PCM. Running the vendored `av_resample` instead moves **62 of 3328 fingerprint
+bits** and yields `ISCC:EIAXUJFCEZZOJYVC` rather than the published `ISCC:EIAWUJFCEZZOJYVD` — two
+bits apart in the code, which matches under a similarity threshold and fails under equality. That
+is the whole reason this package ports `swresample`.
+
+**`swresample` is not one number either, and it does not matter.** Its hand-written SIMD kernels
+and its portable C differ by about one unit in the last place, which shows up as **54 of 170917
+resampled samples differing by 1**. After the step back to 16 bits the two are byte-identical, and
+the fingerprints are identical to the bit. This package matches the portable C exactly, and
+therefore matches both.

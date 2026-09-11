@@ -469,3 +469,171 @@ func TestDownmixTruncation(t *testing.T) {
 		}
 	}
 }
+
+// --- resampler stages -------------------------------------------------------
+
+// TestResamplerSetupMatchesReference pins the values swresample's
+// resample_init derives. These decide the filter's length, how many phases
+// exist and how the accumulator steps, so every one is load-bearing and none
+// is obvious by inspection.
+//
+// The three cases are chosen to cover both convolution paths. When the rate
+// ratio reduces exactly, exact_rational collapses the phase bank and the
+// accumulator never carries a fraction, so the reference takes its common
+// path. When it does not reduce below the 256-phase bank, a fraction remains
+// and the reference interpolates between neighbouring phases instead. A
+// resampler can be right about one path and wrong about the other.
+func TestResamplerSetupMatchesReference(t *testing.T) {
+	cases := map[string]struct {
+		in                         int
+		filterLength, alloc        int
+		phases                     int
+		srcIncr, dstIncr, div, mod int
+		index                      int
+	}{
+		// 1 in 4: a single phase, no fraction, common path.
+		"44100": {44100, 80, 80, 1, 262144, 1048576, 4, 0, -39},
+		// 147 in 640: many phases, still no fraction, common path.
+		"48000": {48000, 88, 88, 147, 2048, 1310720, 640, 0, -6321},
+		// Does not reduce below 256 phases, so a fraction carries and the
+		// linear path runs.
+		"8000": {8000, 16, 16, 256, 7056, 1310720, 185, 5360, -1792},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := newSWRResampler(tc.in, 11025)
+			got := []int{c.filterLength, c.filterAlloc, c.phaseCount, c.srcIncr, c.dstIncr, c.dstIncrDiv, c.dstIncrMod, c.index}
+			want := []int{tc.filterLength, tc.alloc, tc.phases, tc.srcIncr, tc.dstIncr, tc.div, tc.mod, tc.index}
+			names := []string{"filterLength", "filterAlloc", "phaseCount", "srcIncr", "dstIncr", "dstIncrDiv", "dstIncrMod", "index"}
+			for i := range got {
+				if got[i] != want[i] {
+					t.Errorf("%s = %d, want %d", names[i], got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestResamplerCoversBothConvolutionPaths guards the coverage the case above
+// relies on: if every rate in the conformance matrix reduced exactly, the
+// linear path would never run and nothing would say so.
+func TestResamplerCoversBothConvolutionPaths(t *testing.T) {
+	var common, linear int
+	for _, rate := range []int{8000, 16000, 22050, 32000, 44100, 48000, 96000} {
+		if newSWRResampler(rate, 11025).dstIncrMod == 0 {
+			common++
+		} else {
+			linear++
+		}
+	}
+	if common == 0 || linear == 0 {
+		t.Errorf("the rate matrix exercises only one path: %d common, %d linear", common, linear)
+	}
+}
+
+// TestResamplerFilterBankNormalised checks the property build_filter
+// normalises for: the taps of the zeroth phase sum to one, so a constant
+// signal passes through at its own level rather than scaled.
+func TestResamplerFilterBankNormalised(t *testing.T) {
+	c := newSWRResampler(44100, 11025)
+	var sum float64
+	for i := range c.filterLength {
+		sum += float64(c.filterBank[i])
+	}
+	if math.Abs(sum-1.0) > 1e-6 {
+		t.Errorf("phase 0 taps sum to %v, want 1", sum)
+	}
+}
+
+// TestResamplerFilterBankWrapAround pins the extra phase appended to the
+// bank. The linear path reads phase+1 unconditionally, so the slot past the
+// last real phase has to hold the first phase shifted by one tap, or an
+// interpolated sample at the wrap point is built from whatever was in memory.
+func TestResamplerFilterBankWrapAround(t *testing.T) {
+	c := newSWRResampler(48000, 11025)
+	tail := c.filterAlloc * c.phaseCount
+	if got, want := c.filterBank[tail], c.filterBank[c.filterAlloc-1]; got != want {
+		t.Errorf("wrap slot = %v, want %v", got, want)
+	}
+	for k := range c.filterAlloc - 1 {
+		if got, want := c.filterBank[tail+1+k], c.filterBank[k]; got != want {
+			t.Fatalf("wrap tap %d = %v, want %v", k, got, want)
+		}
+	}
+}
+
+// TestResamplerPreservesLevel is an end-to-end sanity check on the filter: a
+// constant signal must come out at the same level, not scaled or ringing.
+func TestResamplerPreservesLevel(t *testing.T) {
+	in := make([]float32, 44100)
+	for i := range in {
+		in[i] = 0.25
+	}
+	out := newSWRResampler(44100, 11025).resample(in)
+	if len(out) == 0 {
+		t.Fatal("no output")
+	}
+	// Skip the edges, where the mirrored padding is still in the window.
+	for i := 200; i < len(out)-200; i++ {
+		if math.Abs(float64(out[i])-0.25) > 1e-4 {
+			t.Fatalf("sample %d = %v, want 0.25", i, out[i])
+		}
+	}
+}
+
+// TestResamplerOutputLength checks the rate conversion itself: the output
+// must be the input scaled by the rate ratio, within a sample or two of
+// filter edge effects.
+func TestResamplerOutputLength(t *testing.T) {
+	for _, rate := range []int{8000, 16000, 22050, 32000, 44100, 48000, 96000} {
+		in := make([]float32, rate) // one second
+		out := newSWRResampler(rate, 11025).resample(in)
+		if diff := len(out) - 11025; diff < -2 || diff > 2 {
+			t.Errorf("%d Hz: one second resampled to %d samples, want about 11025", rate, len(out))
+		}
+	}
+}
+
+func TestResamplerEmptyInput(t *testing.T) {
+	if got := newSWRResampler(44100, 11025).resample(nil); got != nil {
+		t.Errorf("resampling nothing produced %d samples", len(got))
+	}
+}
+
+// TestBesselI0MatchesReference pins av_bessel_i0 at points either side of the
+// 15.0 branch, since the Kaiser window is built from it and its last bits end
+// up in the filter bank.
+func TestBesselI0MatchesReference(t *testing.T) {
+	cases := map[float64]float64{
+		0:  1.0,
+		1:  1.2660658777520082,
+		9:  1093.5883545113745,
+		15: 339649.3732979139,
+		20: 43558282.55955353,
+	}
+	for x, want := range cases {
+		got := besselI0(x)
+		if math.Abs(got-want) > math.Abs(want)*1e-12 {
+			t.Errorf("besselI0(%v) = %v, want %v", x, got, want)
+		}
+	}
+	if besselI0(-3) != besselI0(3) {
+		t.Error("besselI0 must be even")
+	}
+}
+
+func TestReduceRatio(t *testing.T) {
+	cases := [][4]int{
+		{11025, 44100, 1, 4},
+		{11025, 48000, 147, 640},
+		{11025, 11025, 1, 1},
+		{7, 13, 7, 13},
+		{0, 5, 0, 1},
+	}
+	for _, c := range cases {
+		n, d := reduceRatio(c[0], c[1])
+		if n != c[2] || d != c[3] {
+			t.Errorf("reduceRatio(%d,%d) = %d/%d, want %d/%d", c[0], c[1], n, d, c[2], c[3])
+		}
+	}
+}

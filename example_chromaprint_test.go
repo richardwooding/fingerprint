@@ -1,7 +1,6 @@
 package fingerprint_test
 
 import (
-	"encoding/binary"
 	"fmt"
 	"os"
 
@@ -16,12 +15,13 @@ import (
 //
 // This package computes no code itself, and takes no dependency on one.
 func Example_chromaprint() {
-	pcm, err := readTestWAV("testdata/iscc_demo_audio.wav")
+	f, err := os.Open("testdata/iscc_demo_audio.wav")
 	if err != nil {
 		panic(err)
 	}
+	defer func() { _ = f.Close() }()
 
-	cv, err := fingerprint.Chromaprint(pcm)
+	cv, err := fingerprint.ChromaprintFromWAV(f)
 	if err != nil {
 		panic(err)
 	}
@@ -32,33 +32,20 @@ func Example_chromaprint() {
 	// first three: [684003877 683946551 1749295639]
 }
 
-// readTestWAV is just enough RIFF parsing to reach the samples in the
-// 16-bit PCM fixture. Decoding audio is the caller's job — this package
-// takes decoded samples, the way ISCCPixels takes a decoded image.
-func readTestWAV(path string) (fingerprint.PCM, error) {
-	b, err := os.ReadFile(path)
+// Audio that arrives already decoded skips the reader. Chromaprint takes
+// interleaved 16-bit samples at whatever rate they are in, and does the
+// downmix and the resampling itself.
+func Example_chromaprintFromSamples() {
+	samples := make([]int16, 44100*2*5) // five seconds of stereo silence
+	cv, err := fingerprint.Chromaprint(fingerprint.PCM{
+		Samples:    samples,
+		SampleRate: 44100,
+		Channels:   2,
+	})
 	if err != nil {
-		return fingerprint.PCM{}, err
+		panic(err)
 	}
-	var pcm fingerprint.PCM
-	var data []byte
-	for off := 12; off+8 <= len(b); {
-		size := int(binary.LittleEndian.Uint32(b[off+4 : off+8]))
-		if off+8+size > len(b) {
-			break
-		}
-		switch body := b[off+8 : off+8+size]; string(b[off : off+4]) {
-		case "fmt ":
-			pcm.Channels = int(binary.LittleEndian.Uint16(body[2:4]))
-			pcm.SampleRate = int(binary.LittleEndian.Uint32(body[4:8]))
-		case "data":
-			data = body
-		}
-		off += 8 + size + size%2
-	}
-	pcm.Samples = make([]int16, len(data)/2)
-	for i := range pcm.Samples {
-		pcm.Samples[i] = int16(binary.LittleEndian.Uint16(data[2*i:]))
-	}
-	return pcm, nil
+	fmt.Println("subfingerprints:", len(cv))
+	// Output:
+	// subfingerprints: 19
 }

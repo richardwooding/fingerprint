@@ -1,6 +1,7 @@
 package fingerprint_test
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,17 +12,41 @@ import (
 	"github.com/richardwooding/fingerprint"
 )
 
-// loadPCM reads one of the 16-bit PCM WAV fixtures, via the same helper the
-// godoc example uses. Decoding is deliberately outside the package: its
-// contract is decoded samples, the way ISCCPixels takes a decoded image.
+// loadPCM reads a 16-bit PCM WAV fixture into raw samples. It parses the
+// container by hand rather than calling ChromaprintFromWAV, so the tests that
+// need PCM stay independent of the reader they are meant to cross-check.
 func loadPCM(t testing.TB, name string) fingerprint.PCM {
 	t.Helper()
-	pcm, err := readTestWAV("testdata/" + name)
+	b, err := os.ReadFile("testdata/" + name)
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
 	}
+
+	var pcm fingerprint.PCM
+	var data []byte
+	for off := 12; off+8 <= len(b); {
+		size := int(binary.LittleEndian.Uint32(b[off+4 : off+8]))
+		if off+8+size > len(b) {
+			break
+		}
+		switch body := b[off+8 : off+8+size]; string(b[off : off+4]) {
+		case "fmt ":
+			pcm.Channels = int(binary.LittleEndian.Uint16(body[2:4]))
+			pcm.SampleRate = int(binary.LittleEndian.Uint32(body[4:8]))
+			if bits := binary.LittleEndian.Uint16(body[14:16]); bits != 16 {
+				t.Fatalf("%s: fixture must be 16-bit PCM, got %d-bit", name, bits)
+			}
+		case "data":
+			data = body
+		}
+		off += 8 + size + size%2
+	}
+	pcm.Samples = make([]int16, len(data)/2)
+	for i := range pcm.Samples {
+		pcm.Samples[i] = int16(binary.LittleEndian.Uint16(data[2*i:]))
+	}
 	if len(pcm.Samples) == 0 {
-		t.Fatalf("%s: no samples — fixture missing or not 16-bit PCM", name)
+		t.Fatalf("%s: no samples — fixture missing or malformed", name)
 	}
 	return pcm
 }

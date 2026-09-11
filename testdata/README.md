@@ -71,3 +71,55 @@ change. That is what a soft binding is for, and no other fixture here makes the 
 per pixel, and `golang.org/x/image/bmp` supports 1/2/4/8/24/32 only. Pillow reads it, so `iscc-sdk`
 would fingerprint it and this package cannot. BMP support here covers the paletted, 24-bit and
 32-bit cases, which is proven by a `bmp.Encode` round-trip rather than by a checked-in file.
+
+## iscc_demo_audio.wav, iscc_demo_audio.fpcalc.json
+
+The audio counterpart to `iscc_demo.png`, and the oracle for `Chromaprint`.
+
+The recording is "Belly Button", 15.5 seconds, from `iscc_samples`
+(`iscc_samples/files/audio/demo.wav`) by Titusz Pan, **CC-BY-4.0** — the same collection, author
+and licence as the image fixtures above.
+
+Upstream ships it as 24-bit stereo 44.1 kHz, which is 4.1 MB. What is vendored here is that file
+converted once to the rate Chromaprint actually fingerprints at, which is 342 KB:
+
+```sh
+ffmpeg -i demo.wav -ac 1 -ar 11025 -sample_fmt s16 -c:a pcm_s16le iscc_demo_audio.wav
+```
+
+The conversion is not a convenience — it is what makes the fixture an oracle. `fpcalc` resamples
+with FFmpeg's `swresample` before Chromaprint ever sees the audio, so its numbers for a 44.1 kHz
+file are FFmpeg's resampler as much as they are Chromaprint. Feed it audio already at 11025 Hz mono
+and the resampler is a no-op, leaving Chromaprint alone under test. That is the only reason this
+package can claim an exact match at all.
+
+`iscc_demo_audio.fpcalc.json` is the verbatim stdout of
+
+```sh
+fpcalc -raw -json -signed -length 0 iscc_demo_audio.wav
+```
+
+run with **fpcalc 1.6.0 (FFmpeg Lavc62.11.100 Lavf62.3.100 SwR6.1.100)**. It is committed as
+`fpcalc` printed it rather than transcribed, so there is no hand-copying step to get wrong.
+
+| oracle | source | what it pins |
+| --- | --- | --- |
+| all 104 subfingerprints | `fpcalc -raw -signed` on this file | the whole pipeline, every bit |
+| the same 104 values for `demo.mp3` | `iscc-sdk` `tests/test_audio.py::test_audio_extract_features` | that this `fpcalc` build agrees with the reference |
+| `ISCC:EIAWUJFCEZZOJYVD` | `iscc-sdk` `tests/test_audio.py::test_code_audio_mp3` / `test_code_audio_wav` | the vector end to end, through `GenAudioCodeV0` |
+
+**This package matches all 104 values exactly**, and `iscc.GenAudioCodeV0(cv, 64)` on them returns
+`ISCC:EIAWUJFCEZZOJYVD` — the code `iscc-sdk` publishes for this recording.
+
+**Three encodings, one code, and the measurement that says so.** `fpcalc` was run on all three
+forms of the recording: the 24-bit stereo 44.1 kHz master, the 225 KB MP3, and this 16-bit mono
+11025 Hz derivative. The master and the MP3 agree on all 104 values. The derivative — resampled to
+a quarter of the rate, folded to mono and requantised to 16 bits — differs from them in **2 values
+of 104, which is 2 bits of 3328**, and every one of the three still produces
+`ISCC:EIAWUJFCEZZOJYVD`. That is the audio twin of the lossy-WebP paragraph above, and a sharper
+version of it: the pixels there moved under re-encoding, and here the sample rate itself moved.
+
+**No fixture is committed for the resampling path**, because there is nothing honest to check it
+against. `fpcalc`'s numbers for a 44.1 kHz input are FFmpeg's resampler, and Chromaprint's own
+library resampler is a different filter with different settings, so the two disagree by
+construction and neither is "the" answer. See the README for which inputs carry an exactness claim.

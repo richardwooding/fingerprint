@@ -1,15 +1,26 @@
-// Package fingerprint provides two small content-fingerprinting
-// primitives for near-duplicate / similar-content detection:
+// Package fingerprint provides small content-fingerprinting primitives
+// for near-duplicate / similar-content detection:
 //
 //   - TEXT: a 64-bit Charikar SimHash (Compute / Distance / Similarity)
 //     for finding near-duplicate documents. Pure stdlib.
 //   - IMAGES: a 64-bit perceptual hash / pHash (PHash / PHashFromImage,
 //     with PHashHex / PHashFromHex helpers) for finding visually-similar
 //     images. Uses golang.org/x/image for high-quality downscaling.
+//   - IMAGES: ISO 24138 normalisation (ISCCPixels /
+//     ISCCPixelsFromReader) — the 1024 grayscale bytes an ISCC
+//     Image-Code is computed from. See iscc.go.
+//   - AUDIO: Chromaprint (Chromaprint) — the raw acoustic fingerprint an
+//     ISCC Audio-Code is computed from. Pure stdlib. See chromaprint.go.
 //
-// Both produce a uint64 whose pairwise Hamming Distance (and the derived
-// Similarity = 1 - distance/64) measures closeness — small distance ==
-// similar content.
+// The two hashes produce a uint64 whose pairwise Hamming Distance (and
+// the derived Similarity = 1 - distance/64) measures closeness — small
+// distance == similar content.
+//
+// The two ISCC inputs are neither hashes nor on that metric. They are
+// the bytes and the vector that ISO 24138's own code generators take,
+// and this package deliberately stops short of computing the codes: pair
+// it with github.com/iscc/iscc-lib/packages/go, which is the official
+// pure-Go implementation of the standard.
 //
 // # SimHash (text)
 //

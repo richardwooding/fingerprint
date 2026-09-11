@@ -67,13 +67,13 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     <div class="gl-wrap gl-hero-grid">
       <div>
         <p class="gl-eyebrow">go · simhash + phash · near-dup</p>
-        <h1>Find near-duplicate <span class="gl-grad">text and images.</span></h1>
-        <p class="sub">Two content-fingerprinting primitives for near-duplicate detection — a shingled Charikar SimHash for text and a DCT perceptual hash for images. Both return a <code>uint64</code>; pairwise Hamming distance measures closeness.</p>
+        <h1>Find near-duplicate <span class="gl-grad">text, images and audio.</span></h1>
+        <p class="sub">Content-fingerprinting primitives for near-duplicate detection — a shingled Charikar SimHash for text, a DCT perceptual hash for images, and the two inputs ISO 24138 needs to mint an <strong>ISCC</strong>: normalised pixels, and a pure-Go <strong>Chromaprint</strong>.</p>
         <div class="gl-cta">
           <a class="gl-btn primary" href="#install">Install</a>
           <a class="gl-btn ghost" href="https://pkg.go.dev/github.com/richardwooding/fingerprint">Go Reference</a>
         </div>
-        <p class="gl-hint">MIT licensed · one small dependency for images · Go 1.25+</p>
+        <p class="gl-hint">MIT licensed · no cgo · one small dependency, for images only · Go 1.25+</p>
       </div>
       <div class="gl-term">
         <div class="bar">
@@ -95,8 +95,8 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   <section class="gl-section" id="features">
     <div class="gl-wrap">
       <p class="gl-eyebrow">what you get</p>
-      <h2>Two hashes, one number, one metric.</h2>
-      <p class="gl-lede" style="margin-top:14px">Fingerprint a document or an image down to a single <code>uint64</code>, then measure closeness with Hamming distance — the same primitive works for both.</p>
+      <h2>Two hashes, and the two inputs an ISCC needs.</h2>
+      <p class="gl-lede" style="margin-top:14px">Fingerprint a document or an image down to a single <code>uint64</code> and measure closeness with Hamming distance — or produce the normalised pixels and the Chromaprint vector that ISO 24138's own code generators take.</p>
       <div class="gl-grid feat" style="margin-top:32px">
 
         <div class="gl-card">
@@ -125,8 +125,13 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         </div>
 
         <div class="gl-card">
+          <h3><span class="gl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h2l2-6 3 14 3-11 2 5h6"/></svg></span>Audio Chromaprint</h3>
+          <p><code>Chromaprint</code> — the acoustic fingerprint an <strong>ISCC Audio-Code</strong> is computed from, matching <code>fpcalc</code> bit for bit. Every other Go option needs cgo or the binary.</p>
+        </div>
+
+        <div class="gl-card">
           <h3><span class="gl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V5a2 2 0 0 1 2-2h2M20 7V5a2 2 0 0 0-2-2h-2M4 17v2a2 2 0 0 0 2 2h2M20 17v2a2 2 0 0 1-2 2h-2"/><path d="M8 12h8"/></svg></span>Small</h3>
-          <p>The SimHash half is pure stdlib; the pHash half uses <code>golang.org/x/image</code> for high-quality downscaling. Go 1.25+.</p>
+          <p>The SimHash and Chromaprint halves are pure stdlib — the FFT and classifiers are hand-written. Only images pull in <code>golang.org/x/image</code>. Go 1.25+.</p>
         </div>
 
       </div>

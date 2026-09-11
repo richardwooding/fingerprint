@@ -7,7 +7,7 @@
 
 **Website:** [richardwooding.github.io/fingerprint](https://richardwooding.github.io/fingerprint/)
 
-Two small content-fingerprinting primitives for **near-duplicate / similar-content
+Small content-fingerprinting primitives for **near-duplicate / similar-content
 detection** in Go:
 
 - **Text — Charikar SimHash** (`Compute` / `Distance` / `Similarity`): a 64-bit
@@ -19,9 +19,14 @@ detection** in Go:
 - **Images — ISO 24138 normalisation** (`ISCCPixels` / `ISCCPixelsFromReader`): the 1024
   grayscale bytes an **ISCC** Image-Code is computed from. Not a hash — the missing step
   before one.
+- **Audio — Chromaprint** (`Chromaprint`): the raw acoustic fingerprint an **ISCC**
+  Audio-Code is computed from, in pure Go. Also the missing step before one, and
+  [nothing else in Go does it without cgo](#audio-fingerprints-chromaprint).
 
-Both return a `uint64`; pairwise **Hamming `Distance`** (and `Similarity = 1 -
-distance/64`) measures closeness — small distance means similar content.
+The two hashes return a `uint64`; pairwise **Hamming `Distance`** (and `Similarity = 1 -
+distance/64`) measures closeness — small distance means similar content. The two ISCC
+inputs are not hashes and not on that metric: they are the bytes and the vector the
+standard's own code generators take.
 
 ```sh
 go get github.com/richardwooding/fingerprint
@@ -107,9 +112,83 @@ that photograph, which is exactly the robustness a perceptual identifier exists 
 
 This package computes no ISCC and takes no dependency on one: it produces the bytes and stops.
 
+## Audio fingerprints (Chromaprint)
+
+An ISCC **Audio-Code** is a SimHash over a [Chromaprint](https://acoustid.org/chromaprint)
+fingerprint, and `iscc-lib`'s `GenAudioCodeV0` takes that fingerprint as given. Producing one in Go
+meant shelling out to the `fpcalc` binary or binding the C library through cgo — closed to anything
+that ships a static binary or compiles to WebAssembly. This does it in process:
+
+```go
+cv, err := fingerprint.Chromaprint(pcm)        // []int32, one word per ~124 ms
+code, err := iscc.GenAudioCodeV0(cv, 64)       // github.com/iscc/iscc-lib/packages/go
+// ISCC:EIAWUJFCEZZOJYVD
+```
+
+The input is decoded audio — interleaved 16-bit samples at 11025 Hz, the rate Chromaprint
+fingerprints at — because there is no audio equivalent of `image.Decode`'s registry to hide the
+decoding behind:
+
+```go
+pcm := fingerprint.PCM{Samples: samples, SampleRate: 11025, Channels: 2}
+```
+
+Multi-channel input is downmixed by integer averaging, as the reference does. The result is a
+slice, not a `uint64`, so `Distance` and `Similarity` do not apply: two Chromaprint vectors are
+compared through the ISCC code computed from them.
+
+Audio under about three seconds, and audio at any other sample rate, is **refused** rather than
+fingerprinted. Both would otherwise return an empty vector, and `GenAudioCodeV0` turns an empty
+vector into a perfectly well-formed code — the same one for every such file. A wrong code is a
+claim that this content is some other content.
+
+### Why this is a port of the reference rather than an implementation of a spec
+
+Chromaprint has no specification. There is no ISO document, no RFC, not even a complete written
+description — the author's own write-up stops at "just the basics to get the general idea". The
+algorithm is whatever `acoustid/chromaprint` does, and ISO 24138 inherits that: it names
+Chromaprint as the Audio-Code's input and says nothing about how to compute one.
+
+So this is a port, and it is faithful in the places where faithfulness is visible in the output:
+the Hamming window scaled by `1/INT16_MAX` and **narrowed to `float32`**, because the reference
+stores it in a `float` array and that rounding reaches the result; the sixteen trained classifiers
+of algorithm TEST2 in their table order, because the packing shifts each one's two bits in as it
+goes; the integral-image rectangle splits with their integer division, because an odd rectangle's
+halves are uneven there too; and the Gray coding, so a value drifting across a quantiser threshold
+costs one bit of distance rather than two.
+
+**It matches `fpcalc` exactly** — all 104 subfingerprints, all 3328 bits, for the test recording.
+
+The one place it deliberately does not follow the reference is the transform itself. Chromaprint
+computes its FFT in whichever library it was built against, and the FFmpeg backends work in
+`float32` throughout, so there is no single reference spectrum to reproduce — "bit-exact against
+`fpcalc`" would mean bit-exact against one build. This computes the transform in `float64`, which
+is as close to the true value as the windowed input allows, and therefore the closest single answer
+to every build at once. The measurement above says it is close enough that the question never
+arises.
+
+### What carries an exactness claim
+
+Only audio already at **11025 Hz** — mono, or any channel count, since the downmix is integer
+arithmetic with one right answer.
+
+Everything else has to be resampled first, and resampling is where the honest claim runs out.
+`fpcalc` does not use Chromaprint's own resampler: it resamples with FFmpeg's `swresample` before
+Chromaprint sees a sample, while a library caller feeding raw audio gets Chromaprint's internal
+`av_resample` with different settings. The two disagree by construction, so there is no single
+"correct" vector for a 44.1 kHz file to match — which is why this build refuses other rates
+outright rather than quietly picking one and calling the result conformant.
+
+In practice the choice matters less than it sounds. Resampling the test recording from 44.1 kHz
+stereo down to 11025 Hz mono moves **2 of its 104 values, 2 bits of 3328**, and the ISCC is
+unchanged — the same code the 24-bit master, the MP3 and the downsampled WAV all produce. See
+[`testdata/README.md`](testdata/README.md) for the fixtures and the commands.
+
 ## Requirements
 
-- **Go 1.25+** — the SimHash half is pure stdlib. Everything image-shaped uses
+- **Go 1.25+** — the SimHash and Chromaprint halves are pure stdlib; the FFT, the chroma
+  folding and the classifiers are all hand-written, so audio adds no dependency at all.
+  Everything image-shaped uses
   [`golang.org/x/image`](https://pkg.go.dev/golang.org/x/image), which sets the floor: the pHash
   half for high-quality downscaling, and both image halves for the BMP, TIFF and WebP decoders.
   That is still one dependency, and the arithmetic remains ours — the ISCC normaliser's resample

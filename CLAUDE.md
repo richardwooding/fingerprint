@@ -129,3 +129,62 @@ BMP, TIFF and WebP came later, and the plumbing was the easy half. What is worth
   ascending, which TIFF requires and x/image enforces), which is how the refusals and the TIFF
   orientation are tested without vendoring four more files. WebP has no Go encoder, so its two
   fixtures are generated once with `npx sharp` and the command is recorded.
+
+## Chromaprint (`chromaprint.go`, `chromaprint_fft.go`, `chromaprint_chroma.go`, `chromaprint_classify.go`)
+
+`Chromaprint` produces the raw acoustic fingerprint an ISO 24138 Audio-Code is computed from —
+the `[]int32` that `iscc.GenAudioCodeV0` takes, and that `fpcalc -raw -signed` prints. Like
+`ISCCPixels` it is **the missing step before a code, not a code**, and the package still takes no
+dependency on `iscc-lib`.
+
+- **It is a port of `acoustid/chromaprint`, not an implementation of a spec, because there is no
+  spec.** No ISO document, no RFC, no complete written description. ISO 24138 names Chromaprint as
+  the Audio-Code's input and says nothing about computing one. When behaviour is in question, the
+  answer is in the C++ source, and the constants came from `fingerprinter_configuration.cpp`
+  (algorithm **TEST2**, the default and the one behind every ISCC Audio-Code).
+- **The window is narrowed to `float32` on purpose.** The reference stores it in an `FFTSample`
+  (`float`) array scaled by `1.0/INT16_MAX`, so every coefficient and every windowed sample is
+  rounded to single precision before use, and that rounding reaches the output. Widening it to
+  `float64` "for accuracy" would silently stop matching `fpcalc`.
+- **The FFT is deliberately `float64`, and this is the one intentional divergence.** The reference
+  computes it in whichever library it was built against — FFTW, KissFFT, vDSP or FFmpeg's — and the
+  FFmpeg backends are `float32` throughout, so there is no single reference spectrum. `float64` is
+  the closest single answer to every build. It has never cost a bit on the fixture.
+- **The classifier table's order is part of the format.** `subfingerprint` shifts each classifier's
+  two bits in as it goes, so reordering `chromaClassifiersTest2` changes every word. So does
+  touching the Gray code table, the integer division in the filter splits, or the `<` in
+  `quantize`.
+- **`chromaFilter` starts its ring at size 1, not 0.** That is the reference's off-by-one, and it
+  decides how many frames are swallowed during warm-up, which decides the length of the vector.
+  Four in, nothing out; the fifth is the first smoothed frame.
+- **Interpolation and the silence remover are not implemented, on purpose.** Both exist in the
+  reference but are off in TEST2. TEST1/3/4/5 are not implemented either.
+- **Other sample rates are refused rather than resampled.** `fpcalc` resamples with FFmpeg's
+  `swresample` before Chromaprint sees anything, while a library caller gets Chromaprint's internal
+  `av_resample` with different settings — the two disagree by construction, so there is no single
+  correct vector for a 44.1 kHz file. Adding a resampler means picking one and saying which, in the
+  README, next to a measurement. Do not add one silently.
+- **Short input is refused rather than returned empty.** `GenAudioCodeV0(nil, 64)` returns a
+  well-formed code built from a 32-byte zero digest — the same code for every file too short to
+  fingerprint. That is a wrong claim, not a missing one.
+- **Nothing here is shared with `phash.go`, and nothing should be.** Its DCT is a naive type-II
+  over a fixed 32×32 grid computing only the low 8×8; it has nothing in common with a 4096-point
+  real FFT. More to the point, pHash values are cached in `file-search-on`'s bbolt index, so
+  changing that code is a silent cache invalidation.
+
+### Tests
+
+`chromaprint_internal_test.go` is **the only internal test file in the package** — everything else
+is tested through the exported API from `fingerprint_test`. The audio pipeline earns the exception
+because its stages are individually specified by the reference and individually wrong in different
+ways: when the end-to-end vector stops matching `fpcalc`, "which stage" is the whole question, and
+an end-to-end assertion cannot answer it.
+
+The conformance test asserts **all 104 subfingerprints** for `testdata/iscc_demo_audio.wav`
+against committed `fpcalc` output, and reports differing *bits* as well as values, because a
+fingerprint is a packed bit field: "three values differ" says nothing about whether the cause is
+one borderline quantiser decision or a broken stage. Comparison is exact — a bounded compare would
+be meaningless here, since a one-bit error and a catastrophic one look identical.
+
+There is no synthetic-audio fixture and no resampling fixture. See `testdata/README.md` for why,
+and for the three-encodings measurement (2 bits of 3328 move, the code does not).

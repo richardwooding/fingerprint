@@ -16,7 +16,7 @@ jobs:
       matrix:
         # Lower bound matches the go.mod floor (driven by golang.org/x/image);
         # stable proves forward-compatibility.
-        go: ["1.25", "stable"]
+        go: ["1.26", "stable"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
